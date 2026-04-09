@@ -1,0 +1,9 @@
+.env
+__pycache__/
+.pytest_cache/
+chain/node_modules/
+chain/out/
+chain/cache/
+chain/broadcast/
+runs/*
+!runs/agent_44000.pt

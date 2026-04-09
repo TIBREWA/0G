@@ -1,0 +1,43 @@
+# skrl PPO Hyperparameters for Tennisbot Isaac Lab
+# Matches the SB3 config from rl/config.py, translated to skrl format.
+
+# ── PPO Algorithm ────────────────────────────────────────────
+rollouts: 128                    # n_steps per worker (longer window to encounter rewards)
+learning_epochs: 10              # PPO epochs per update
+mini_batches: 8                  # Number of minibatches (batch_size = rollouts × num_envs / mini_batches)
+discount_factor: 0.99
+lambda_factor: 0.95              # GAE lambda
+learning_rate: 1.0e-4            # Match SB3 — 3e-4 too aggressive without SDE
+learning_rate_scheduler: "KLAdaptiveLR"
+learning_rate_scheduler_kwargs:
+  kl_threshold: 0.008
+random_timesteps: 0
+learning_starts: 0
+grad_norm_clip: 0.5
+ratio_clip: 0.2                  # PPO clip range
+value_clip: 0.2
+clip_predicted_values: true
+entropy_loss_scale: 0.005        # Keep exploration alive (no SDE in skrl)
+value_loss_scale: 0.5
+kl_threshold: 0.0                # No early stopping
+state_preprocessor: "RunningStandardScaler"
+state_preprocessor_kwargs: {}
+value_preprocessor: "RunningStandardScaler"
+value_preprocessor_kwargs: {}
+
+# ── Network Architecture ─────────────────────────────────────
+policy:
+  class: "GaussianMixin"
+  hidden_layers: [256, 256]
+  activation: "elu"
+  initial_log_std: -1.0          # matches SB3 log_std_init
+
+value:
+  class: "DeterministicMixin"
+  hidden_layers: [256, 256]
+  activation: "elu"
+
+# ── Training ─────────────────────────────────────────────────
+timesteps: 50_000
+num_envs: 24576
+headless: true

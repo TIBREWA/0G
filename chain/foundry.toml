@@ -1,0 +1,13 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = []
+solc_version = "0.8.19"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+
+[rpc_endpoints]
+testnet = "https://evmrpc-testnet.0g.ai"

@@ -101,6 +101,9 @@ class TennisbotEnv(DirectRLEnv):
         # Zone exploration tracking
         self._zone_visited = torch.zeros(n, self.cfg.zone_grid_cols * self.cfg.zone_grid_rows, dtype=torch.bool, device=device)
 
+        # Mission focus: flat zone index the policy is steered to, -1 = off (training default)
+        self._focus_zone = torch.full((n,), -1, dtype=torch.long, device=device)
+
         # Balls collected per episode (for info tracking)
         self._balls_collected_total = torch.zeros(n, dtype=torch.int32, device=device)
 
@@ -762,6 +765,7 @@ class TennisbotEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._loiter_counter[env_ids] = 0.0
         self._zone_visited[env_ids] = False
+        self._focus_zone[env_ids] = -1
 
         # Reset obs monitor episode tracking if env 0 was reset
         if self._obs_monitor is not None:
@@ -1169,6 +1173,8 @@ class TennisbotEnv(DirectRLEnv):
         )
         valid = in_range & in_fov & alive & ~occluded  # (n, nb)
 
+        visible = valid & self._focus_mask(self._ball_pos[:, :, 0], self._ball_pos[:, :, 1])
+
         # ── Discovery: mark balls as discovered when first seen in FOV ──
         self._ball_discovered = self._ball_discovered | valid
         # Update remembered positions with distance-proportional noise (simulates vision error)
@@ -1198,8 +1204,8 @@ class TennisbotEnv(DirectRLEnv):
 
         # For each env, find the nearest valid same-side ball; fallback to cross-side
         INF = 1e6
-        dist_same = torch.where(valid & same_side, dist, torch.full_like(dist, INF))
-        dist_cross = torch.where(valid & (~same_side), dist, torch.full_like(dist, INF))
+        dist_same = torch.where(visible & same_side, dist, torch.full_like(dist, INF))
+        dist_cross = torch.where(visible & (~same_side), dist, torch.full_like(dist, INF))
 
         min_same, idx_same = dist_same.min(dim=1)
         min_cross, idx_cross = dist_cross.min(dim=1)
@@ -1381,6 +1387,24 @@ class TennisbotEnv(DirectRLEnv):
     # Zone-Based Ball Memory
     # ─────────────────────────────────────────────────────────
 
+    def set_focus_zone(self, zone: int, env_ids: torch.Tensor | None = None) -> None:
+        """Steer the policy to a flat zone index (row * cols + col); -1 clears the focus."""
+        if env_ids is None:
+            self._focus_zone[:] = zone
+        else:
+            self._focus_zone[env_ids] = zone
+
+    def _focus_mask(self, bx: torch.Tensor, by: torch.Tensor) -> torch.Tensor:
+        """(n, nb) True for balls the policy may act on: all of them, or those in the focus zone."""
+        cols = self.cfg.zone_grid_cols
+        rows = self.cfg.zone_grid_rows
+        hx = self.cfg.court_half_x
+        hy = self.cfg.court_half_y
+        col_idx = ((bx + hx) / (2 * hx) * cols).clamp(0, cols - 1).long()
+        row_idx = ((by + hy) / (2 * hy) * rows).clamp(0, rows - 1).long()
+        focus = self._focus_zone.unsqueeze(1)
+        return (focus < 0) | (row_idx * cols + col_idx == focus)
+
     def _get_zone_counts(self) -> torch.Tensor:
         """
         Count *discovered* alive balls in a grid over the court.
@@ -1396,10 +1420,9 @@ class TennisbotEnv(DirectRLEnv):
         hx = self.cfg.court_half_x
         hy = self.cfg.court_half_y
 
-        known = (self._ball_discovered & self._ball_alive).float()  # (n, nb)
-
         bx = self._ball_map_pos[:, :, 0]  # (n, nb) — remembered positions
         by = self._ball_map_pos[:, :, 1]
+        known = (self._ball_discovered & self._ball_alive & self._focus_mask(bx, by)).float()  # (n, nb)
 
         # Map ball positions to grid cell indices
         # X: [-hx, hx] → [0, cols-1], Y: [-hy, hy] → [0, rows-1]
@@ -1441,9 +1464,9 @@ class TennisbotEnv(DirectRLEnv):
         device = self.device
 
         # Cell-occupancy from discovered+alive balls
-        known = (self._ball_discovered & self._ball_alive).float()  # (n, nb)
         bx = self._ball_map_pos[:, :, 0]
         by = self._ball_map_pos[:, :, 1]
+        known = (self._ball_discovered & self._ball_alive & self._focus_mask(bx, by)).float()  # (n, nb)
         col_idx = ((bx + hx) / (2 * hx) * cols).clamp(0, cols - 1).long()
         row_idx = ((by + hy) / (2 * hy) * rows).clamp(0, rows - 1).long()
         cell_idx = row_idx * cols + col_idx
@@ -1482,6 +1505,11 @@ class TennisbotEnv(DirectRLEnv):
         # Target selection: populated overrides unvisited
         nearest_idx = torch.where(has_pop, nearest_pop_idx, nearest_unvis_idx)
         has_any = has_pop | has_unvis
+
+        # A mission focus overrides the policy's own choice of zone
+        focused = self._focus_zone >= 0
+        nearest_idx = torch.where(focused, self._focus_zone, nearest_idx)
+        has_any = has_any | focused
 
         # Gather absolute (x,y) of the target cell
         target_cx = torch.gather(flat_cx.unsqueeze(0).expand(n, -1), 1, nearest_idx.unsqueeze(1)).squeeze(1)

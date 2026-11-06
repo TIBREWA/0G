@@ -37,6 +37,7 @@ parser.add_argument("--brief", default="A match starts in 3 minutes. Clear the n
 parser.add_argument("--limit_s", type=float, default=180.0)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--checkpoint", default=str(ROOT / "runs/agent_44000.pt"))
+parser.add_argument("--near_side_first", action="store_true", help="Only offer far-side zones once the starting side has nothing left")
 parser.add_argument("--out", default=str(ROOT / "episodes"))
 parser.add_argument("--no_pacing", action="store_true", help="Run faster than real time")
 parser.add_argument("--sever_at_s", type=float, default=None, help="Cut the route to 0G at this mission time")
@@ -95,6 +96,7 @@ def main() -> None:
     alive = env._ball_alive[0].clone()
     log = EpisodeLog(f"ep-{int(time.time())}-s{args.seed}", {
         "brief": args.brief, "seed": args.seed, "limit_s": args.limit_s,
+        "near_side_first": args.near_side_first,
         "steps_per_second": STEPS_PER_SECOND,
         "policy_sha256": hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest(),
         "router": ROUTER_URL, "models": MODELS,
@@ -107,7 +109,7 @@ def main() -> None:
     })
     brain = ZeroGBrain(API_KEY, MODELS)
     limit_steps = int(args.limit_s * STEPS_PER_SECOND)
-    mission = Mission(brain, log, args.brief, limit_steps)
+    mission = Mission(brain, log, args.brief, limit_steps, near_side_first=args.near_side_first)
     zero_action = torch.zeros(1, 2, device=env.device)
 
     started = time.monotonic()

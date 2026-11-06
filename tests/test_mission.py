@@ -1,7 +1,8 @@
+import threading
 import time
 
 from isaac.brain.client import BrainUnavailable, Decision
-from isaac.brain.mission import RETRY_START_STEPS, Mission, Phase, Snapshot
+from isaac.brain.mission import RETRY_START_STEPS, Mission, Phase, Snapshot, build_options
 
 
 def decision(zone=5, action="go_to_zone", rid="r1"):
@@ -117,10 +118,9 @@ def test_cleared_zone_triggers_a_checkpoint_after_settling():
     mission, brain, log = make(decision(zone=5), decision(zone=6), settle_steps=3)
     settle(mission, snap(1))
     empty = [0] * 24
-    assert mission.update(snap(2, zone=5, known=empty)).drive is True
-    assert mission.update(snap(3, zone=5, known=empty)).drive is True
-    assert mission.update(snap(4, zone=5, known=empty, collected=2)).drive is False
-    settle(mission, snap(5, zone=5, known=empty))
+    assert mission.update(snap(2, zone=5, known=empty, collected=2)).drive is True
+    assert mission.update(snap(3, zone=5, known=empty, collected=2)).drive is True
+    settle(mission, snap(4, zone=5, known=empty, collected=2))
     assert log.decisions[1][0] == "zone_done"
     assert brain.calls[1]["previous_assignments"][0]["balls_collected"] == 2
 
@@ -181,3 +181,148 @@ def test_only_one_unexplored_zone_is_offered_once_balls_are_known():
     options = build_options(snap(0, known=known), set())
     assert [o["balls"] for o in options] == [2, 0]
 
+
+class Gate:
+    """Brain that holds its answer until released, like a slow network."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = []
+        self.release = threading.Event()
+
+    def decide(self, state):
+        self.calls.append(state)
+        self.release.wait(2)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def driving_mission(brain, log=None, **kwargs):
+    """A mission already driving to zone 5, started by a real answer."""
+    gate_open = getattr(brain, "release", None)
+    if gate_open:
+        gate_open.set()
+    m = Mission(brain, log or Log(), "brief", 10_000, settle_steps=3, **kwargs)
+    settle(m, snap(0))
+    if gate_open:
+        gate_open.clear()
+    return m
+
+
+def wait_for(condition):
+    for _ in range(200):
+        if condition():
+            return
+        time.sleep(0.005)
+    raise AssertionError("condition never met")
+
+
+def test_next_zone_is_asked_for_while_the_rover_keeps_driving():
+    brain = Gate(decision(5), decision(7))
+    m = driving_mission(brain)
+    empty = [0] * 24
+    empty[7] = 2
+    command = m.update(snap(10, zone=5, known=empty))
+    wait_for(lambda: len(brain.calls) == 2)
+    assert command.drive and command.focus_zone == 5
+    assert brain.calls[1]["trigger"] == "zone_done"
+    assert 5 in [h["zone"] for h in brain.calls[1]["previous_assignments"]]
+
+
+def test_answer_ready_at_checkpoint_means_no_stop():
+    brain = Gate(decision(5), decision(7))
+    log = Log()
+    m = driving_mission(brain, log)
+    empty = [0] * 24
+    empty[7] = 2
+    m.update(snap(10, zone=5, known=empty))
+    brain.release.set()
+    wait_for(lambda: m._future is not None and m._future.done())
+    assert m.update(snap(11, zone=5, known=empty)).drive
+    command = m.update(snap(12, zone=5, known=empty))
+    assert command.drive and command.focus_zone == 7
+    assert m.phase is Phase.DRIVING and len(log.decisions) == 2
+
+
+def test_late_answer_stops_the_wheels_until_it_lands():
+    brain = Gate(decision(5), decision(7))
+    m = driving_mission(brain)
+    empty = [0] * 24
+    empty[7] = 2
+    for step in (10, 11):
+        m.update(snap(step, zone=5, known=empty))
+    command = m.update(snap(12, zone=5, known=empty))
+    assert not command.drive and m.phase is Phase.THINKING
+    brain.release.set()
+    wait_for(lambda: m._future.done())
+    assert m.update(snap(13, zone=5, known=empty)).focus_zone == 7
+
+
+def test_failed_early_ask_stops_at_once_and_records_no_decision():
+    brain = Gate(decision(5), BrainUnavailable("down"))
+    log = Log()
+    m = driving_mission(brain, log)
+    empty = [0] * 24
+    empty[7] = 2
+    m.update(snap(10, zone=5, known=empty))
+    brain.release.set()
+    wait_for(lambda: m._future.done())
+    command = m.update(snap(11, zone=5, known=empty))
+    assert not command.drive and command.focus_zone == -1
+    assert m.phase is Phase.SAFE_STOP
+    assert len(log.decisions) == 1 and len(log.stops) == 1
+
+
+def test_answer_is_dropped_if_new_balls_appear_in_the_zone():
+    brain = Gate(decision(5), decision(7), decision(5))
+    log = Log()
+    m = driving_mission(brain, log)
+    empty = [0] * 24
+    empty[7] = 2
+    m.update(snap(10, zone=5, known=empty))
+    wait_for(lambda: len(brain.calls) == 2)
+    busy = list(empty)
+    busy[5] = 1
+    m.update(snap(11, zone=5, known=busy))
+    brain.release.set()
+    wait_for(lambda: m._future is None or m._future.done())
+    command = m.update(snap(12, zone=5, known=busy))
+    assert command.drive and command.focus_zone == 5
+    assert m._future is None and len(log.decisions) == 1
+
+
+def test_budget_ask_happens_before_the_budget_runs_out():
+    brain = Gate(decision(5), decision(7))
+    m = driving_mission(brain, zone_budget_steps=100)
+    m.update(snap(96))
+    assert len(brain.calls) == 1
+    m.update(snap(97))
+    wait_for(lambda: len(brain.calls) == 2)
+    assert brain.calls[1]["trigger"] == "zone_budget_spent"
+
+
+def test_far_side_is_held_back_while_near_side_has_work():
+    known = [0] * 24
+    known[1] = 1   # near side (left of the net)
+    known[4] = 5   # far side, more balls
+    s = Snapshot(0, -5.0, 0.0, 0.0, 1, False, 0, known, [True] * 24)
+    assert [o["zone"] for o in build_options(s, set())] == [4, 1]
+    assert [o["zone"] for o in build_options(s, set(), near_left=True)] == [1]
+
+
+def test_far_side_opens_when_near_side_is_done():
+    known = [0] * 24
+    known[4] = 5
+    s = Snapshot(0, -5.0, 0.0, 0.0, 1, False, 0, known, [True] * 24)
+    assert [o["zone"] for o in build_options(s, set(), near_left=True)] == [4]
+
+
+def test_near_side_is_where_the_mission_started():
+    brain = Script(decision(1))
+    known = [0] * 24
+    known[1], known[4] = 1, 5
+    m = Mission(brain, Log(), "brief", 10_000, near_side_first=True)
+    settle(m, Snapshot(0, 8.0, 0.0, 0.0, 16, False, 0, known, [True] * 24))
+    assert [o["zone"] for o in brain.calls[0]["options"]] == [4]

@@ -1173,7 +1173,9 @@ class TennisbotEnv(DirectRLEnv):
         )
         valid = in_range & in_fov & alive & ~occluded  # (n, nb)
 
-        visible = valid & self._focus_mask(self._ball_pos[:, :, 0], self._ball_pos[:, :, 1])
+        # With a focus zone, the policy still sees balls close enough to pick up on the way
+        nearby = dist <= self.cfg.en_route_ball_dist_m
+        visible = valid & (self._focus_mask(self._ball_pos[:, :, 0], self._ball_pos[:, :, 1]) | nearby)
 
         # ── Discovery: mark balls as discovered when first seen in FOV ──
         self._ball_discovered = self._ball_discovered | valid

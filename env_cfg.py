@@ -131,6 +131,7 @@ class TennisbotEnvCfg(DirectRLEnvCfg):
     max_wheel_rad_s: float = 31.4 * 0.6  # rad/s — 60% of 300 RPM real motor
 
     # ── Camera FOV (for ground-truth "simulated vision") ─────
+    light_scale: float = 1.0       # brightness only; has no effect on observations
     cam_fov: float = 78.0          # degrees
     en_route_ball_dist_m: float = 4.0  # balls this close stay visible outside a focus zone
     camera_offset_x: float = 0.35  # m — distance forward from robot center

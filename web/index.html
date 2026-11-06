@@ -46,12 +46,12 @@ code{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 <section class="panel"><h2>Decisions and stops</h2><ol id="events"></ol></section>
 </div>
 <section class="panel" id="proof">Checking record…</section>
-<p class="runs"><a href="?">Full run: 27 of 27 balls</a> · <a href="?root=0x312061b028b4aceb2704f3dd9e632c0e1cb3f72c785202e3dab1e5d5061464f2">0G outage: safe stop</a></p>
+<p class="runs"><a href="?">Near side first: 21 of 22 balls</a> · <a href="?root=0x377b2518674cf77107d0e5cd43d02be14af18ad09cbd14191225aa41ed3c3f25">Fastest run: 27 of 27 in 83 s</a> · <a href="?root=0xc47feb7656c0b72dc417aba13333431830a1855e6faf7bb1f140ece575a47f57">0G outage: safe stop</a></p>
 </main>
 <script>
 const CONFIG={registry:"0x398a7a21C2836a1BE3304433e2aA20954C5dA69C",rpc:"https://evmrpc-testnet.0g.ai",indexer:"https://indexer-storage-testnet-turbo.0g.ai",explorer:"https://chainscan-galileo.0g.ai",selector:"0xa943aeee"};
 const params=new URLSearchParams(location.search);
-const RUNS={demo:"0x7ec00342fc4db096c38e335818f3fefbf440379f8295a88d4d9b1b80f27bbec7",outage:"0x312061b028b4aceb2704f3dd9e632c0e1cb3f72c785202e3dab1e5d5061464f2"};
+const RUNS={demo:"0xbb6727fe8589d685e93410857ac3291901483b21b2c4f0adbad5bcb049d262ca",fast:"0x377b2518674cf77107d0e5cd43d02be14af18ad09cbd14191225aa41ed3c3f25",outage:"0xc47feb7656c0b72dc417aba13333431830a1855e6faf7bb1f140ece575a47f57"};
 const named=params.get("root");
 // episode.json is a byte-for-byte copy of the demo log, so the default view is still checked on chain.
 const root=named||(params.get("file")?null:RUNS.demo);
@@ -67,7 +67,7 @@ async function load(){
   ep=JSON.parse(rawText);
   tMax=ep.result.end_step;
   $("time").max=tMax;
-  $("brief").textContent=ep.brief+" Seed "+ep.seed+", models: "+ep.models.join(", ");
+  $("brief").textContent=ep.brief+" Seed "+ep.seed+", models: "+ep.models.join(", ")+(ep.near_side_first?". Far-side zones are only offered to 0G once the starting side is finished.":"");
   buildEvents();verify();requestAnimationFrame(tick);
 }
 function buildEvents(){

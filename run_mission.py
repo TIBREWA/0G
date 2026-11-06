@@ -29,6 +29,7 @@ if __name__ == "__main__" and not (API_KEY and MODELS):
     raise SystemExit(1)
 
 import torch  # must be imported before Omniverse
+from PIL import Image
 
 from isaaclab.app import AppLauncher
 
@@ -38,12 +39,14 @@ parser.add_argument("--limit_s", type=float, default=180.0)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--checkpoint", default=str(ROOT / "runs/agent_44000.pt"))
 parser.add_argument("--near_side_first", action="store_true", help="Only offer far-side zones once the starting side has nothing left")
+parser.add_argument("--frames", default=None, help="Save overhead camera frames to this folder")
 parser.add_argument("--out", default=str(ROOT / "episodes"))
 parser.add_argument("--no_pacing", action="store_true", help="Run faster than real time")
 parser.add_argument("--sever_at_s", type=float, default=None, help="Cut the route to 0G at this mission time")
 parser.add_argument("--restore_at_s", type=float, default=None, help="Restore the route to 0G")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
+args.enable_cameras = args.enable_cameras or args.frames is not None
 simulation_app = AppLauncher(args).app
 
 from isaac.brain.client import ROUTER_URL, ZeroGBrain
@@ -55,6 +58,7 @@ from isaac.tennisbot_env import TennisbotEnv
 
 UNREACHABLE_URL = "http://127.0.0.1:9/v1"
 POSE_EVERY_STEPS = 6
+FRAME_EVERY_STEPS = 2
 
 
 def snapshot(env: TennisbotEnv, step: int, visited: list[bool]) -> Snapshot:
@@ -89,7 +93,14 @@ def main() -> None:
     cfg.scene.num_envs = 1
     cfg.seed = args.seed
     cfg.debug_draw_fov = False
-    env = TennisbotEnv(cfg=cfg)
+    frames = Path(args.frames) if args.frames else None
+    if frames:
+        frames.mkdir(parents=True, exist_ok=True)
+        cfg.viewer.eye = (0.0, -10.0, 31.0)
+        cfg.viewer.lookat = (0.0, -0.8, 0.0)
+        cfg.light_scale = 0.12
+        cfg.viewer.resolution = (1280, 720)
+    env = TennisbotEnv(cfg=cfg, render_mode="rgb_array" if frames else None)
     policy = LegsPolicy(args.checkpoint, device=env.device)
     obs, _ = env.reset()
 
@@ -138,6 +149,8 @@ def main() -> None:
         if step % POSE_EVERY_STEPS == 0:
             pose = env.robot.data.root_pos_w[0] - env.scene.env_origins[0]
             log.pose(step, pose[0].item(), pose[1].item(), env._odom_yaw[0].item(), command.phase.value, command.focus_zone)
+        if frames and step % FRAME_EVERY_STEPS == 0:
+            Image.fromarray(env.render()).save(frames / f"{step:06d}.jpg", quality=88)
         step += 1
         if terminated.any():
             mission.end_reason = "all_balls_collected"

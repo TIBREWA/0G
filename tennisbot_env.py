@@ -202,10 +202,10 @@ class TennisbotEnv(DirectRLEnv):
             self.scene.rigid_objects[f"obstacle_{i}"] = obs_obj
 
         # ── Lights ───────────────────────────────────────────
-        light_cfg = sim_utils.DomeLightCfg(intensity=15000.0, color=(0.85, 0.85, 0.8))
+        light_cfg = sim_utils.DomeLightCfg(intensity=15000.0 * self.cfg.light_scale, color=(0.85, 0.85, 0.8))
         light_cfg.func("/World/Light", light_cfg)
         
-        sun_cfg = sim_utils.DistantLightCfg(intensity=15000.0, color=(0.9, 0.9, 0.8))
+        sun_cfg = sim_utils.DistantLightCfg(intensity=15000.0 * self.cfg.light_scale, color=(0.9, 0.9, 0.8))
         sun_cfg.func("/World/Sun", sun_cfg, translation=(1.0, 1.0, 10.0))
         
         # ── Visual Markers for Balls ─────────────────────────

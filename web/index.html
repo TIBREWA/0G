@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tennisbot Replay</title>
+<style>
+:root{--bg:#0f1512;--panel:#18211c;--line:#2c3a32;--text:#e8efe9;--muted:#9fb0a5;--court:#1f5c46;--ball:#d6f04a;--rover:#fff;--focus:#4fc3f7;--stop:#ff6b5e;--ok:#6fdc8c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,sans-serif}
+main{max-width:1180px;margin:auto;padding:20px 16px}
+h1{font-size:22px;margin:0}
+.sub{color:var(--muted);margin:4px 0 16px;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px}
+@media(max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+canvas{width:100%;height:auto;display:block;border-radius:6px}
+.controls{display:flex;gap:10px;align-items:center;margin-top:10px}
+button{background:var(--focus);color:#06202c;border:0;border-radius:6px;padding:7px 14px;font-weight:600;cursor:pointer}
+input[type=range]{flex:1;min-width:0}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.stat b{display:block;font-size:20px}.stat span{color:var(--muted);font-size:12px}
+.status{font-weight:600;margin-top:10px}.safe_stop{color:var(--stop)}.driving{color:var(--ok)}.thinking{color:var(--focus)}
+h2{font-size:15px;margin:0 0 8px}
+ol{list-style:none;margin:0;padding:0;max-height:430px;overflow:auto}
+li{border-top:1px solid var(--line);padding:8px 2px;font-size:13px}
+li.now{background:#21302a}
+li.stop{color:var(--stop)}
+code{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+#proof{margin-top:16px;font-size:13px;overflow-wrap:anywhere}
+.good{color:var(--ok)}.bad{color:var(--stop)}
+.runs{font-size:13px;margin:12px 0 0}.runs a{color:var(--focus)}
+</style>
+</head>
+<body>
+<main>
+<h1>Tennisbot Replay</h1>
+<p class="sub" id="brief">Loading episode…</p>
+<div class="grid">
+<section class="panel">
+<canvas id="court" width="900" height="470"></canvas>
+<div class="controls"><button id="play">Pause</button><input id="time" type="range" min="0" max="1" value="0" step="1" aria-label="Mission time"><span id="clock">0 s</span></div>
+<div class="status" id="status"></div>
+<div class="stats"><div class="stat"><b id="balls">0</b><span>balls collected</span></div><div class="stat"><b id="decisions">0</b><span>0G decisions</span></div><div class="stat"><b id="stops">0</b><span>safe stops</span></div></div>
+</section>
+<section class="panel"><h2>Decisions and stops</h2><ol id="events"></ol></section>
+</div>
+<section class="panel" id="proof">Checking record…</section>
+<p class="runs"><a href="?">Full run: 27 of 27 balls</a> · <a href="?root=0x312061b028b4aceb2704f3dd9e632c0e1cb3f72c785202e3dab1e5d5061464f2">0G outage: safe stop</a></p>
+</main>
+<script>
+const CONFIG={registry:"0x398a7a21C2836a1BE3304433e2aA20954C5dA69C",rpc:"https://evmrpc-testnet.0g.ai",indexer:"https://indexer-storage-testnet-turbo.0g.ai",explorer:"https://chainscan-galileo.0g.ai",selector:"0xa943aeee"};
+const params=new URLSearchParams(location.search);
+const RUNS={demo:"0x7ec00342fc4db096c38e335818f3fefbf440379f8295a88d4d9b1b80f27bbec7",outage:"0x312061b028b4aceb2704f3dd9e632c0e1cb3f72c785202e3dab1e5d5061464f2"};
+const named=params.get("root");
+// episode.json is a byte-for-byte copy of the demo log, so the default view is still checked on chain.
+const root=named||(params.get("file")?null:RUNS.demo);
+const $=id=>document.getElementById(id);
+const canvas=$("court"),ctx=canvas.getContext("2d");
+let ep,rawText,tMax=1,t=0,playing=true,last=0,speed=4;
+
+async function load(){
+  const url=named?`${CONFIG.indexer}/file?root=${named}`:(params.get("file")||"episode.json");
+  const res=await fetch(url);
+  if(!res.ok)throw new Error("Could not load the episode ("+res.status+")");
+  rawText=await res.text();
+  ep=JSON.parse(rawText);
+  tMax=ep.result.end_step;
+  $("time").max=tMax;
+  $("brief").textContent=ep.brief+" Seed "+ep.seed+", models: "+ep.models.join(", ");
+  buildEvents();verify();requestAnimationFrame(tick);
+}
+function buildEvents(){
+  const items=[...ep.decisions.map(d=>({step:d.step,html:`<b>${(d.step/24).toFixed(0)} s, zone ${d.zone}</b> (${d.trigger.replaceAll("_"," ")})<br>${d.reason}, TEE verified: ${d.tee_verified}, ${d.latency_s} s<br><code>${d.request_id}</code>`})),
+    ...ep.safe_stops.map(s=>({step:s.step,stop:1,html:`<b>${(s.step/24).toFixed(0)} s, safe stop</b><br>0G unreachable, no AI decision made`}))].sort((a,b)=>a.step-b.step);
+  $("events").innerHTML=items.map(i=>`<li data-step="${i.step}" class="${i.stop?"stop":""}">${i.html}</li>`).join("");
+}
+function pose(step){
+  const T=ep.trajectory;let lo=0,hi=T.length-1;
+  while(lo<hi){const m=(lo+hi+1)>>1;if(T[m][0]<=step)lo=m;else hi=m-1}
+  return T[lo];
+}
+function draw(step){
+  const W=canvas.width,H=canvas.height,c=ep.court,sx=W/(2*c.half_x),sy=H/(2*c.half_y);
+  const X=x=>(x+c.half_x)*sx,Y=y=>H-(y+c.half_y)*sy;
+  const p=pose(step);
+  ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue("--court");ctx.fillRect(0,0,W,H);
+  if(p[5]>=0){const col=p[5]%c.cols,row=Math.floor(p[5]/c.cols);ctx.fillStyle="rgba(79,195,247,.28)";ctx.fillRect(col*W/c.cols,H-(row+1)*H/c.rows,W/c.cols,H/c.rows)}
+  ctx.strokeStyle="rgba(255,255,255,.18)";ctx.lineWidth=1;ctx.font="12px system-ui";ctx.fillStyle="rgba(255,255,255,.45)";
+  for(let r=0;r<c.rows;r++)for(let k=0;k<c.cols;k++){ctx.strokeRect(k*W/c.cols,H-(r+1)*H/c.rows,W/c.cols,H/c.rows);ctx.fillText(r*c.cols+k,k*W/c.cols+6,H-(r+1)*H/c.rows+16)}
+  ctx.strokeStyle="#fff";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(X(.2),Y(-6.35));ctx.lineTo(X(.2),Y(6.35));ctx.stroke();
+  ctx.fillStyle="#8a6d4b";for(const o of ep.obstacles)ctx.fillRect(X(o[0])-16,Y(o[1])-16,32,32);
+  ctx.strokeStyle="rgba(255,255,255,.55)";ctx.lineWidth=2;ctx.beginPath();let started=false;
+  for(const q of ep.trajectory){if(q[0]>step)break;started?ctx.lineTo(X(q[1]),Y(q[2])):ctx.moveTo(X(q[1]),Y(q[2]));started=true}ctx.stroke();
+  const gone=new Set(ep.collected.filter(e=>e.step<=step).map(e=>e.ball));
+  ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue("--ball");
+  for(const b of ep.balls)if(!gone.has(b[0])){ctx.beginPath();ctx.arc(X(b[1]),Y(b[2]),5,0,7);ctx.fill()}
+  ctx.save();ctx.translate(X(p[1]),Y(p[2]));ctx.rotate(-p[3]);ctx.fillStyle=p[4]==="safe_stop"?"#ff6b5e":"#fff";ctx.beginPath();ctx.moveTo(16,0);ctx.lineTo(-11,10);ctx.lineTo(-11,-10);ctx.fill();ctx.restore();
+  $("balls").textContent=gone.size+" / "+ep.balls.length;
+  $("decisions").textContent=ep.decisions.filter(d=>d.step<=step).length;
+  $("stops").textContent=ep.safe_stops.filter(s=>s.step<=step).length;
+  $("clock").textContent=(step/24).toFixed(0)+" s";
+  const label={driving:"Driving to the zone 0G chose",thinking:"Stopped, waiting for 0G",safe_stop:"SAFE STOP: 0G unreachable, wheels stopped"}[p[4]]||p[4];
+  $("status").textContent=label;$("status").className="status "+p[4];
+  let now=null;for(const li of $("events").children){li.classList.remove("now");if(+li.dataset.step<=step)now=li}now&&now.classList.add("now");
+}
+function tick(ms){
+  if(playing){t=Math.min(tMax,t+(ms-last)*.024*speed);$("time").value=t;if(t>=tMax){playing=false;$("play").textContent="Play"}}
+  last=ms;draw(t);requestAnimationFrame(tick);
+}
+async function verify(){
+  const el=$("proof"),n=ep.decisions.length,tee=ep.decisions.filter(d=>d.tee_verified===true).length;
+  let html=`${n} decisions with request ids, ${tee} TEE verified. `;
+  const digest=[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(rawText)))].map(b=>b.toString(16).padStart(2,"0")).join("");
+  if(!CONFIG.registry||!root){el.innerHTML=html+"This log is not linked to an on-chain record.";return}
+  try{
+    const res=await fetch(CONFIG.rpc,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"eth_call",params:[{to:CONFIG.registry,data:CONFIG.selector+root.slice(2)},"latest"]})});
+    const onChain=(await res.json()).result.slice(2,66);
+    html+=onChain===digest?`<span class="good">Log matches the hash on 0G Chain.</span>`:`<span class="bad">Log does not match the on-chain hash.</span>`;
+    el.innerHTML=html+` <a style="color:inherit" href="${CONFIG.explorer}/address/${CONFIG.registry}">Registry contract</a>`;
+  }catch(e){el.innerHTML=html+`<span class="bad">Could not reach 0G Chain to check the log.</span>`}
+}
+$("play").onclick=()=>{if(t>=tMax)t=0;playing=!playing;$("play").textContent=playing?"Pause":"Play"};
+$("time").oninput=e=>{t=+e.target.value;playing=false;$("play").textContent="Play"};
+load().catch(e=>{$("brief").textContent=e.message});
+</script>
+</body>
+</html>

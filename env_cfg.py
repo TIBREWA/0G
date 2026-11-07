@@ -21,7 +21,7 @@ from isaaclab.utils import configclass
 
 # ── Paths ────────────────────────────────────────────────────
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
-_ROVER_URDF = "/home/gui/PycharmProjects/pybullet/models/rover/cylinder.urdf"
+_ROVER_URDF = str(Path(__file__).resolve().parent / "model/rover/cylinder.urdf")
 
 # ── Court Dimensions (must match world.urdf) ─────────────────
 FENCE_HALF_X = 15.0        # m — half-length

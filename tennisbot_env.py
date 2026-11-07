@@ -13,6 +13,7 @@ Key design:
 
 from __future__ import annotations
 
+from pathlib import Path
 import math
 from typing import Sequence
 
@@ -149,7 +150,7 @@ class TennisbotEnv(DirectRLEnv):
 
         # ── Blender Visual Court ─────────────────────────────
         import os
-        court_path = "/home/gui/PycharmProjects/pybullet/models/court/court.usdc"
+        court_path = str(Path(__file__).resolve().parent / "model/court.usdc")
         if os.path.exists(court_path):
             court_cfg = sim_utils.UsdFileCfg(usd_path=court_path, scale = (0.1,0.1,0.1))
             # Elevate by 1mm to prevent z-fighting with the ground plane
